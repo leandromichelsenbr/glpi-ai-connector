@@ -1,20 +1,31 @@
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any
 
 from mcp.server import MCPServer
+from mcp.server.transport_security import TransportSecuritySettings
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 
-from glpi_ai_connector.core.client import GLPIClient
 from glpi_ai_connector.core.audit import AuditLogger
-from glpi_ai_connector.core.policy import SecurityPolicy
+from glpi_ai_connector.core.client import GLPIClient
 from glpi_ai_connector.core.config import Settings
+from glpi_ai_connector.core.policy import SecurityPolicy
 from glpi_ai_connector.services.tickets import TicketService
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 mcp = MCPServer("GLPI AI Connector")
+
+
+def _csv_env(name: str, default: list[str] | None = None) -> list[str]:
+    value = os.getenv(name, "").strip()
+    if not value:
+        return default or []
+    return [item.strip() for item in value.split(",") if item.strip()]
 
 
 def service() -> TicketService:
@@ -34,6 +45,12 @@ def service() -> TicketService:
         policy=policy,
         audit=AuditLogger(settings.audit_file),
     )
+
+
+@mcp.custom_route("/health", methods=["GET"])
+async def health(_request: Request) -> JSONResponse:
+    """Liveness check público; não expõe configuração nem credenciais."""
+    return JSONResponse({"status": "ok", "service": "glpi-ai-connector"})
 
 
 @mcp.tool()
@@ -145,7 +162,53 @@ async def close_ticket(ticket_id: int) -> Any:
 
 
 def main() -> None:
-    mcp.run()
+    transport = os.getenv("MCP_TRANSPORT", "stdio").strip().lower()
+
+    if transport == "stdio":
+        logger.info("Iniciando GLPI AI Connector via stdio")
+        mcp.run()
+        return
+
+    if transport != "streamable-http":
+        raise ValueError(
+            "MCP_TRANSPORT deve ser 'stdio' ou 'streamable-http'."
+        )
+
+    host = os.getenv("MCP_HOST", "127.0.0.1")
+    port = int(os.getenv("MCP_PORT", "8000"))
+    path = os.getenv("MCP_PATH", "/mcp")
+
+    allowed_hosts = _csv_env(
+        "MCP_ALLOWED_HOSTS",
+        ["127.0.0.1:*", "localhost:*", "[::1]:*"],
+    )
+    allowed_origins = _csv_env(
+        "MCP_ALLOWED_ORIGINS",
+        ["http://127.0.0.1:*", "http://localhost:*", "http://[::1]:*"],
+    )
+
+    security = TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=allowed_hosts,
+        allowed_origins=allowed_origins,
+    )
+
+    logger.info(
+        "Iniciando GLPI AI Connector em http://%s:%s%s",
+        host,
+        port,
+        path,
+    )
+
+    mcp.run(
+        transport="streamable-http",
+        host=host,
+        port=port,
+        streamable_http_path=path,
+        stateless_http=True,
+        json_response=True,
+        transport_security=security,
+    )
 
 
 if __name__ == "__main__":
