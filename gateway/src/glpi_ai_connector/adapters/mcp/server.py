@@ -5,10 +5,13 @@ import os
 from typing import Any
 
 from mcp.server import MCPServer
+from mcp.server.auth.settings import AuthSettings
 from mcp.server.transport_security import TransportSecuritySettings
+from pydantic import AnyHttpUrl
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from glpi_ai_connector.adapters.mcp.auth import StaticBearerTokenVerifier, auth_enabled
 from glpi_ai_connector.core.audit import AuditLogger
 from glpi_ai_connector.core.client import GLPIClient
 from glpi_ai_connector.core.config import Settings
@@ -18,14 +21,40 @@ from glpi_ai_connector.services.tickets import TicketService
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-mcp = MCPServer("GLPI AI Connector")
-
 
 def _csv_env(name: str, default: list[str] | None = None) -> list[str]:
     value = os.getenv(name, "").strip()
     if not value:
         return default or []
     return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _build_mcp() -> MCPServer:
+    if not auth_enabled():
+        return MCPServer("GLPI AI Connector")
+
+    token = os.getenv("MCP_BEARER_TOKEN", "").strip()
+    required_scopes = _csv_env("MCP_REQUIRED_SCOPES", ["glpi:mcp"])
+    issuer_url = os.getenv("MCP_AUTH_ISSUER", "http://127.0.0.1:8000").strip()
+    resource_url = os.getenv(
+        "MCP_RESOURCE_URL",
+        "http://127.0.0.1:8000/mcp",
+    ).strip()
+
+    logger.info("Autenticação Bearer habilitada para o endpoint MCP")
+
+    return MCPServer(
+        "GLPI AI Connector",
+        token_verifier=StaticBearerTokenVerifier(token, required_scopes),
+        auth=AuthSettings(
+            issuer_url=AnyHttpUrl(issuer_url),
+            resource_server_url=AnyHttpUrl(resource_url),
+            required_scopes=required_scopes,
+        ),
+    )
+
+
+mcp = _build_mcp()
 
 
 def service() -> TicketService:
@@ -170,9 +199,7 @@ def main() -> None:
         return
 
     if transport != "streamable-http":
-        raise ValueError(
-            "MCP_TRANSPORT deve ser 'stdio' ou 'streamable-http'."
-        )
+        raise ValueError("MCP_TRANSPORT deve ser 'stdio' ou 'streamable-http'.")
 
     host = os.getenv("MCP_HOST", "127.0.0.1")
     port = int(os.getenv("MCP_PORT", "8000"))
@@ -193,12 +220,7 @@ def main() -> None:
         allowed_origins=allowed_origins,
     )
 
-    logger.info(
-        "Iniciando GLPI AI Connector em http://%s:%s%s",
-        host,
-        port,
-        path,
-    )
+    logger.info("Iniciando GLPI AI Connector em http://%s:%s%s", host, port, path)
 
     mcp.run(
         transport="streamable-http",
