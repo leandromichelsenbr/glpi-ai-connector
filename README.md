@@ -1,8 +1,8 @@
 # GLPI AI Connector
 
-Integração entre **GLPI** e agentes de IA, com **MCP (Model Context Protocol)** como primeiro protocolo de integração.
+Integração entre **GLPI** e agentes de IA, com **MCP (Model Context Protocol)** como protocolo principal de integração.
 
-O objetivo principal é permitir interações como:
+O objetivo é permitir interações como:
 
 > “Crie um chamado no GLPI para verificar a divergência fiscal.”
 
@@ -11,9 +11,9 @@ O agente chama a ferramenta MCP `create_ticket`, o Gateway converte a ação par
 ## Arquitetura
 
 ```text
-ChatGPT / Claude / outro agente MCP
+ChatGPT / Claude / outro cliente MCP
               |
-              | MCP
+              | HTTPS + MCP
               v
 +-----------------------------+
 | GLPI AI Connector Gateway   |
@@ -40,17 +40,20 @@ glpi-ai-connector/
 │   ├── src/
 │   ├── tests/
 │   ├── pyproject.toml
+│   ├── Dockerfile
+│   ├── docker-compose.yml
 │   └── .env.example
 ├── plugin/
 │   └── glpiaiconnector/      # Plugin PHP instalável no GLPI
 ├── docs/
+├── TODO.md
 ├── LICENSE
 └── README.md
 ```
 
 ## Gateway
 
-A versão atual já foi validada contra GLPI 10 com as ferramentas:
+A versão atual foi validada contra GLPI 10 com as ferramentas:
 
 - `get_ticket`
 - `search_tickets`
@@ -65,7 +68,16 @@ A versão atual já foi validada contra GLPI 10 com as ferramentas:
 - `add_solution`
 - `close_ticket`
 
-### Desenvolvimento local
+### Transportes MCP
+
+O Gateway suporta:
+
+- `stdio` para desenvolvimento e MCP Inspector;
+- `Streamable HTTP` para acesso remoto.
+
+O endpoint remoto foi homologado com autenticação Bearer Token e HTTPS.
+
+### Execução local
 
 ```powershell
 cd gateway
@@ -74,10 +86,44 @@ py -m venv .venv
 python -m pip install -e ".[dev]"
 Copy-Item .env.example .env
 pytest
-mcp dev src/glpi_ai_connector/adapters/mcp/server.py
+python -m glpi_ai_connector.adapters.mcp.server
 ```
 
-O `.env` contém a URL e os tokens da API REST do GLPI e **nunca deve ser versionado**.
+O `.env` contém URL, tokens e configurações do Gateway e **nunca deve ser versionado**.
+
+### Docker
+
+O Gateway também foi homologado em Docker, com a porta MCP publicada apenas em `127.0.0.1:8000` e um reverse proxy responsável pelo HTTPS público.
+
+Arquitetura validada em produção:
+
+```text
+Internet
+   |
+   | HTTPS
+   v
+Apache
+   |
+   v
+127.0.0.1:8000
+   |
+   v
+Docker
+   |
+   v
+GLPI AI Connector Gateway
+   |
+   v
+GLPI REST API
+```
+
+Endpoint atualmente homologado:
+
+```text
+https://mcp.usinabr.com.br/mcp
+```
+
+O endpoint `/health` permanece público para liveness. O endpoint `/mcp` exige autenticação Bearer.
 
 ## Plugin GLPI
 
@@ -97,13 +143,18 @@ Para desenvolvimento, copie `plugin/glpiaiconnector` para `<GLPI>/plugins/glpiai
 - Gateway MCP local: **validado**
 - Tools de leitura e escrita: **validadas**
 - Plugin GLPI 10: **instalação validada**
-- MCP remoto via HTTPS: **próxima etapa**
-- Integração direta com ChatGPT: **objetivo da próxima fase**
+- Streamable HTTP: **validado**
+- Bearer Token: **validado**
+- Docker: **validado em Windows e Ubuntu 22.04**
+- Apache reverse proxy: **validado**
+- HTTPS público: **validado**
+- MCP Inspector externo: **validado**
+- Integração direta com ChatGPT: **aguardando homologação em ChatGPT Business**
 
-## Próximos passos
+## Retomada
 
-1. disponibilizar o Gateway via MCP Streamable HTTP;
-2. adicionar autenticação ao MCP remoto;
-3. publicar o Gateway via HTTPS;
-4. conectar o endpoint MCP ao ChatGPT;
-5. fazer o Plugin fornecer políticas e auditoria centralizadas ao Gateway.
+O projeto está em ponto estável de espera. Ao disponibilizar um workspace ChatGPT Business com suporte ao MCP necessário para ações de escrita, o próximo teste será conectar o endpoint remoto e executar uma operação real como:
+
+> “Crie um chamado no GLPI.”
+
+Consulte [TODO.md](TODO.md) para as próximas etapas e melhorias planejadas.
